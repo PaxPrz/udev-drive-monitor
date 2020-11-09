@@ -141,8 +141,8 @@ class USBDrive:
         self.ID_FS_LABEL = self._device.properties.get('ID_FS_LABEL')
         self.ID_VENDOR = self._device.properties.get('ID_VENDOR')
         self.ID_MODEL = self._device.properties.get('ID_MODEL')
+        self.is_mounted = False
         self.get_device_mount_point()
-        self.get_storage_information()
 
     def get_device_mount_point(self):
         self._mount_point = None
@@ -156,8 +156,9 @@ class USBDrive:
                     if os.path.isdir(location) and os.path.ismount(location):
                         self._mount_point = Path(location)
                         logging.debug(f'Mount point: {self._mount_point}')
+                        self.is_mounted = True
                         return
-        logging.error('''USB Drive mount point not found''')
+        # logging.error('''USB Drive hasn't been mounted. Keeping it in waiting list''')
 
     def get_storage_information(self):
         if self._mount_point is None or not self._mount_point.exists():
@@ -226,8 +227,11 @@ class Poller(Thread):
                         break
                 for node,usb in self.device_avail.items():
                     try:
-                        _ = usb.get_storage_information()
-                        usb.get_free_space_changes(notify_changes=True)
+                        if not usb.is_mounted:
+                            usb.get_device_mount_point() #set is_mounted to True if device has been mounted
+                        if usb.is_mounted:
+                            _ = usb.get_storage_information()
+                            usb.get_free_space_changes(notify_changes=True)
                     except AttributeError:
                         logging.error('Attribute error for a device. Deleting from dict')
                         self.remove_device(usb._device)
