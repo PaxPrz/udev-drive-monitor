@@ -9,11 +9,19 @@ from threading import Thread, Lock
 from pathlib import Path
 from contextlib import suppress
 
-dev_queue = Queue(maxsize=10)
-POLL_SLEEP_TIME = 5 #seconds
+dev_queue: Queue = Queue(maxsize=10)
+POLL_SLEEP_TIME: int = 5 #seconds
 
-def check_action(action, device):
+def check_action(action:str, device:pyudev.Device):
+    '''
+        Adds the device to queue for Poller to track on.
+
+        Args:
+            action (str): Can be any of the action by watcher add/remove/change/move
+            device (Device): An instance of pyudev Device      
+    '''
     if action in ('add', 'remove'):
+        logging.debug(f'{action.capitalize()}ing Device to queue')
         dev_queue.put((action, device))
 
 def convert_bytes(size: Union[str,int,float]):
@@ -36,7 +44,10 @@ def convert_bytes(size: Union[str,int,float]):
 
 
 class USBMonitor:
-    def __init__(self, only_removable=True):
+    '''
+        Monitor class that keeps track of USB add and remove
+    '''
+    def __init__(self, only_removable:bool=True):
         self._timeout_in_sec = 1 #ms
         self._destruct = False
         self._only_removable = only_removable
@@ -44,16 +55,25 @@ class USBMonitor:
         self._from_glib = True
 
     def _create_monitor(self):
+        '''
+            Creates context and monitor objects
+        '''
         self._context = pyudev.Context()
         self._monitor = pyudev.Monitor.from_netlink(self._context)
         self._monitor.filter_by('block', device_type="partition")
 
     def add_pre_ejected_devices(self):
+        '''
+            If any device is already in the USB before the application starts. It adds those devices to queue.
+        '''
         for device in self._context.list_devices(subsystem="block", DEVTYPE="partition"):
             if device.properties.get('ID_BUS')=="usb":
                 check_action('add', device)
 
     def start_polling(self):
+        '''
+            Synchronous method for polling activity.
+        '''
         self._async_mode = False
         self._create_monitor()
         self.add_pre_ejected_devices()
@@ -71,6 +91,11 @@ class USBMonitor:
                     check_action(dev.action, dev)
     
     def start_asynchronous_polling(self):
+        '''
+            Asynchronous method for polling activity.
+            If GUI is implemented, tries to use observer as defined here
+            https://pyudev.readthedocs.io/en/latest/guide.html#gui-toolkit-integration
+        '''
         self._async_mode = True
         self._create_monitor()
         self.add_pre_ejected_devices()
@@ -117,6 +142,13 @@ class USBMonitor:
             self._async_monitor.start()
 
     def _show_notification(self, action, dev):
+        '''
+            Shows notification of device add/remove
+
+            Args:
+                action (str): Among possible device action add/remove/change/move
+                dev (Device): An instance of pyudev Device
+        '''
         logging.info(f'''Action: {dev.action}
             ID_FS_LABEL: {dev.properties.get('ID_FS_LABEL')}
             ID_VENDOR: {dev.properties.get('ID_VENDOR')}
@@ -127,12 +159,19 @@ class USBMonitor:
         ''')
 
     def destroy(self):
+        '''
+            Destroys the polling loop
+            If asynchronous method is used, sends stop operation
+        '''
         self._destruct = True
         if self._async_mode:
             self._async_monitor.stop()
 
 
 class USBDrive:
+    '''
+        Class that stores the information of currently inserted USB drives
+    '''
     def __init__(self, device):
         self._device = device
         self.storage_info = None
@@ -145,6 +184,10 @@ class USBDrive:
         self.get_device_mount_point()
 
     def get_device_mount_point(self):
+        '''
+            Reads from /proc/mounts file to check if device is mounted
+            Stores the mount point to an object variable and sets is_mounted to True
+        '''
         self._mount_point = None
         with open('/proc/mounts','r') as f:
             for l in f.readlines():
@@ -161,9 +204,13 @@ class USBDrive:
         # logging.error('''USB Drive hasn't been mounted. Keeping it in waiting list''')
 
     def get_storage_information(self):
+        '''
+            Stores recorded storage info as backup and gets current info
+
+            Returns:
+                storage_info (Dict): Returns storage detail containing Total, Free and Used space
+        '''
         if self._mount_point is None or not self._mount_point.exists():
-            # logging.debug(f'Mount Point: {self._mount_point}')
-            # logging.debug('Cannot find storage information')
             return None
         # else:
         #     with suppress(AttributeError):
@@ -172,7 +219,16 @@ class USBDrive:
         self.storage_info = shutil.disk_usage(self._mount_point)
         return self.storage_info
 
-    def get_free_space_changes(self, notify_changes=False):
+    def get_free_space_changes(self, notify_changes:bool=False):
+        '''
+            Checks if any change in free_space
+
+            Args:
+                notify_changes (bool): If True, displays notification when space change is noticed
+            
+            Returns:
+                change_in_freespace (int): Bytes of free space change
+        '''
         if self.prev_storage_info is None or self.storage_info is None:
             return 0
         change_in_freespace = self.prev_storage_info.free - self.storage_info.free
@@ -182,6 +238,9 @@ class USBDrive:
         return change_in_freespace
 
     def notify_change(self, size):
+        '''
+            Logs the Space change info
+        '''
         text = 'Size Added'
         if size < 0:
             text = 'Size Removed'
@@ -195,33 +254,44 @@ class USBDrive:
 
 
 class Poller(Thread):
+    '''
+        A thread that constantly monitors change in free space of connected USBs and adds/removes from dictionary and sleep through POLL_SLEEP_TIME
+    '''
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.device_avail = {}
         self._destruct = False
 
     def create_device(self, device):
+        '''
+            Adds a device to dictionary with keyname = "device_node"
+        '''
         if device.device_node in self.device_avail:
             self.remove_device(device)
         self.device_avail.update({device.device_node: USBDrive(device)})
 
     def remove_device(self, device):
+        '''
+            Removes a device from dictionary
+        '''
         dev_data = self.device_avail.get(device.device_node)
         if dev_data:
             dev = self.device_avail.pop(device.device_node)
             del dev
 
     def run(self):
+        '''
+            Main loop that checks for any new device inserted or removed from queue
+            and from available devices checks if free_space has been changed or not
+        '''
         while not self._destruct:
             try:
                 while dev_queue.qsize() > 0:
                     try:
                         action, device = dev_queue.get(timeout=POLL_SLEEP_TIME)
                         if action == 'add':
-                            logging.debug('Adding Device')
                             self.create_device(device)
                         elif action == 'remove':
-                            logging.debug('Removing Device')
                             self.remove_device(device)
                     except Empty:
                         break
@@ -229,7 +299,7 @@ class Poller(Thread):
                     try:
                         if not usb.is_mounted:
                             usb.get_device_mount_point() #set is_mounted to True if device has been mounted
-                        if usb.is_mounted:
+                        if usb.is_mounted: #else is not implemented because value can turn True from above statement
                             _ = usb.get_storage_information()
                             usb.get_free_space_changes(notify_changes=True)
                     except AttributeError:
@@ -240,6 +310,9 @@ class Poller(Thread):
                 break
 
     def destroy(self):
+        '''
+            Exists from the main run loop
+        '''
         self._destruct = True
 
 
@@ -252,9 +325,10 @@ if __name__ == "__main__":
     logging.debug('''Starting Monitor
         Press Ctrl+C to quit
     ''')
-    #monitor.start_polling() #synchronous method
-
+    
     poller.start()
+
+    #monitor.start_polling() #synchronous method
     monitor.start_asynchronous_polling()
     while True:
         try:
