@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "udev-usb-monitor"
+version = "0.1.0"
+description = "Monitors usb drive activity (Insertion, Ejection, Moving)"
+authors = ["PaxPrz <paxprajapati@gmail.com>"]
+license = "MIT License"
+
+[tool.poetry.dependencies]
+python = "^3.7"
+pyudev = "^0.22.0"
+typing = "^3.7.4.3"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
