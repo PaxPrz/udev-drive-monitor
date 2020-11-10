@@ -5,6 +5,10 @@ description = "Monitors usb drive activity (Insertion, Ejection, Moving)"
 authors = ["PaxPrz <paxprajapati@gmail.com>"]
 license = "MIT License"
 
+packages = [
+    { include="udevmonitor.py" },
+]
+
 [tool.poetry.dependencies]
 python = "^3.7"
 pyudev = "^0.22.0"
